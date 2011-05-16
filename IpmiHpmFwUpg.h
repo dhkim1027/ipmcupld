@@ -306,6 +306,20 @@ struct HpmfwupgActivateFirmwareCtx
    struct HpmfwupgActivateFirmwareResp resp;
 };
 
+#define IPMI_NETFN_APP          0x6
+#define BMC_GET_DEVICE_ID   0x01
+
+struct ipm_devid_rsp {
+    uint8_t device_id;
+    uint8_t device_revision;
+    uint8_t fw_rev1;
+    uint8_t fw_rev2;
+    uint8_t ipmi_version;
+    uint8_t adtl_device_support;
+    uint8_t manufacturer_id[3];
+    uint8_t product_id[2];
+    uint8_t aux_fw_rev[4];
+} ;
 
 
 int HpmfwupgUpgrade(char* imageFilename, int activate, int componentToUpload, int option);

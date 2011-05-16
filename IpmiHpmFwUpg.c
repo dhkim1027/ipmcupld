@@ -23,7 +23,8 @@ static const int HPMFWUPG_UPLOAD_BLOCK_LENGTH  = 1;
 static const int HPMFWUPG_UPLOAD_RETRY         = 2;
 
 VERSIONINFO gVersionInfo[HPMFWUPG_COMPONENT_ID_MAX];
-
+int targetMajor = 0;
+int targetMinor = 0;
 
 int 
 HpmfwupgGetBufferFromFile(char* imageFilename, struct HpmfwupgUpgradeCtx* pFwupgCtx)
@@ -284,7 +285,9 @@ HpmfwupgPreUpgradeCheck(struct HpmfwupgUpgradeCtx* pFwupgCtx,
     
                    pVersionInfo->imageMajor  = pFwImage->version[0];
                    pVersionInfo->imageMinor  = pFwImage->version[1];
-    
+				   pVersionInfo->targetMajor = targetMajor;
+				   pVersionInfo->targetMinor = targetMinor;
+
                    mode = TARGET_VER | IMAGE_VER;
                    
                    if (pVersionInfo->coldResetRequired)
@@ -506,7 +509,7 @@ HpmfwupSendRecv(struct ipmi_rq * req)
 	int send_size = 0;
 	time_t startTime;
 	startTime = time( NULL ); // Read current time in seconds
-	rsp.ccode = 0;
+	rsp.ccode = 1;
    
     memset(tm_req, 0, sizeof(ipmi_terminal_mode_request_t));
     tm_req->responder_lun = 0;
@@ -603,7 +606,9 @@ HpmfwupSendRecv(struct ipmi_rq * req)
 		}
 	}while(time(NULL) - startTime < 10 );
 	recv_buf[recv_size] = 0;
-	
+
+	//printf("%s", recv_buf);
+
 #if 0
 	recv_size = SerialReadData(recv_buf, 30);
 	recv_buf[recv_size] = 0;
@@ -611,7 +616,7 @@ HpmfwupSendRecv(struct ipmi_rq * req)
 
 	HpmFwupgTerminalPktProc(recv_buf, &rsp);
 	if(rsp.ccode != 0){
-		printf("[%s] ccode : %x\n", __FUNCTION__, rsp.ccode);
+		//printf("[%s] ccode : %x\n", __FUNCTION__, rsp.ccode);
 	}
 	
     return &rsp;
@@ -1243,6 +1248,69 @@ HpmGetUserInput(char *str)
     return 0;
 }
 
+int 
+HpmfwupgGetDeviceId(struct ipm_devid_rsp* pGetDevId)
+{
+	int rc = HPMFWUPG_SUCCESS;
+	struct ipmi_rs * rsp;
+	struct ipmi_rq req;
+
+	memset(&req, 0, sizeof(req));
+	req.msg.netfn = IPMI_NETFN_APP;
+	req.msg.cmd = BMC_GET_DEVICE_ID;
+	req.msg.data_len = 0;
+
+	rsp = HpmfwupgSendCmd(req, NULL);
+
+	if ( rsp )
+	{
+		if ( rsp->ccode == 0x00 )
+		{
+			memcpy(pGetDevId, rsp->data, sizeof(struct ipm_devid_rsp));
+			targetMajor = pGetDevId->fw_rev1;
+			targetMinor = pGetDevId->fw_rev2; 
+			//printf("Ver:%d.%d", pGetDevId->fw_rev1, pGetDevId->fw_rev2);
+		}
+		else
+		{
+			//printf("Error getting device ID, compcode = %x\n", rsp->ccode);
+			rc = HPMFWUPG_ERROR;
+		}
+	}
+	else
+	{
+		printf("Error getting device ID\n");
+		rc = HPMFWUPG_ERROR;
+	}
+
+	return rc;
+}
+
+int 
+HpmfwupgTargetCheck(void)
+{
+	int    rc = HPMFWUPG_SUCCESS;
+	struct ipm_devid_rsp devIdrsp;
+	int try_count = 3;
+
+	do{
+		rc = HpmfwupgGetDeviceId(&devIdrsp);
+
+#ifdef __WIN32__
+	Sleep(500);
+#endif
+
+#ifdef __LINUX__
+	usleep(500000);
+#endif
+		if(rc == HPMFWUPG_SUCCESS)
+			break;
+
+		try_count--;
+	}while(try_count);
+
+	return rc;
+}
 
 int 
 HpmfwupgUpgrade(char* imageFilename,
@@ -1284,6 +1352,22 @@ HpmfwupgUpgrade(char* imageFilename,
 
 	if ( rc == HPMFWUPG_SUCCESS )
 	{
+		printf("Performing preparation stage...");
+		rc = HpmfwupgTargetCheck();
+		if ( rc == HPMFWUPG_SUCCESS )
+		{
+			 printf("OK\n");
+			 fflush(stdout);
+		}
+		else
+		{
+			printf("Verify whether the Target board is present \n");
+			return rc;
+		}
+	}
+
+	if ( rc == HPMFWUPG_SUCCESS )
+	{
 		if (HpmGetUserInput("\nServices may be affected during upgrade. Do you wish to continue? y/n "))
 		{
 			rc = HPMFWUPG_SUCCESS;
@@ -1293,25 +1377,6 @@ HpmfwupgUpgrade(char* imageFilename,
 			rc = HPMFWUPG_ERROR;
 		}
 	}
-
-
-#if 0
-   if ( rc == HPMFWUPG_SUCCESS )
-   {
-      printf("Performing preparation stage...");
-      fflush(stdout);
-      rc = HpmfwupgPreparationStage(intf, &fwupgCtx, option);
-      if ( rc == HPMFWUPG_SUCCESS )
-      {
-         printf("OK\n");
-         fflush(stdout);
-      }
-      else
-      {
-         free(fwupgCtx.pImageData);
-      }
-   }
-#endif
 
     /*
     *  UPGRADE STAGE
